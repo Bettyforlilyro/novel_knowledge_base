@@ -127,5 +127,5 @@ class FinalReport(BaseModel):
     characters: List[CharacterState]
     unresolved_foreshadows: List[ForeshadowRecord]
     resolved_foreshadows: List[ForeshadowRecord]
-    world_settings: List[WorldSettings]
+    world_settings: WorldSettings
     stages: List[str]  # e.g., ["volume_1", "volume_2"]
