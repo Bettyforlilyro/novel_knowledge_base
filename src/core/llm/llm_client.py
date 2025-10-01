@@ -11,50 +11,19 @@ import yaml
 from openai import OpenAI, APIConnectionError, RateLimitError, APIStatusError
 from transformers import AutoTokenizer
 
+from utils.cache.cache_manager import CacheManager, MemoryCacheBackend, FileCacheBackend, get_cache_key
+
 # 配置日志
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # 缓存目录
-CACHE_DIR = Path("cache/llm_responses")
+CACHE_DIR = Path("cache_messages/llm_responses")
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
-
-def get_cache_key(messages: List[Dict[str, str]], model: str, response_format: str = "text") -> str:
-    """基于输入生成唯一缓存键，以 model_name + messages + response_format 作为唯一key值"""
-    payload = {
-        "model": model,
-        "messages": messages,
-        "format": response_format
-    }
-    key_str = json.dumps(payload, sort_keys=True, ensure_ascii=False)
-    return hashlib.md5(key_str.encode("utf-8")).hexdigest()
-
-
-def file_cache(func):
-    """装饰器：自动缓存 LLM 响应到本地文件"""
-
-    @wraps(func)
-    def wrapper(self, messages: List[Dict[str, str]], response_format: str = "text", **kwargs):
-        if self.use_cache:
-            cache_key = get_cache_key(messages, self.model, response_format)
-            cache_file = CACHE_DIR / f"{cache_key}.json"
-            if cache_file.exists():
-                logger.debug(f"Cache hit for key: {cache_key[:8]}...")
-                with open(cache_file, "r", encoding="utf-8") as f:
-                    return json.load(f)
-
-        # 没有命中缓存或者不适用缓存，则调用原始函数
-        result = func(self, messages, response_format, **kwargs)
-
-        # 保存缓存
-        if self.use_cache:
-            cache_file = CACHE_DIR / f"{cache_key}.json"
-            with open(cache_file, "w", encoding="utf-8") as f:
-                json.dump(result, f, ensure_ascii=False, indent=2)
-        return result
-
-    return wrapper
+# 创建内存缓存管理器与文件缓存管理器
+memory_cache_manager = CacheManager(MemoryCacheBackend(max_size=1000))
+file_cache_manager = CacheManager(FileCacheBackend(CACHE_DIR))
 
 
 class QwenClient:
@@ -83,9 +52,20 @@ class QwenClient:
         tokenizer_source = tokenizer_path or model_cfg.get("tokenizer_path", self.model)
         logger.info(f"Loading tokenizer from : {tokenizer_source}")
         try:
-            self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_source, trust_remote_code=True, use_fast=True)
+            self.tokenizer = self._load_tokenizer(tokenizer_source)
         except Exception as e:
             logger.error(f"Failed to load tokenizer: {e} from {tokenizer_source}")
+            raise e
+
+    @memory_cache_manager.cached(ttl=3600)
+    def _load_tokenizer(self, tokenizer_source: str) -> AutoTokenizer:
+        """
+        加载tokenizer
+        """
+        try:
+            return AutoTokenizer.from_pretrained(tokenizer_source)
+        except Exception as e:
+            logger.error(f"Failed to load tokenizer: {e}")
             raise e
 
     def count_tokens(self, text: Union[str, List[Dict[str, str]]]) -> int:
@@ -106,7 +86,7 @@ class QwenClient:
         else:
             raise ValueError("Invalid input type. Must be str or List[Dict[str, str]]")
 
-    @file_cache
+    @file_cache_manager.cached(ttl=86400)
     def chat_completion(
             self,
             messages: List[Dict[str, str]],
