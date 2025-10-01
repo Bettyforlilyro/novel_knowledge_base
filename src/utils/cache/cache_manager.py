@@ -1,15 +1,15 @@
 # cache_manager.py
-from dataclasses import dataclass
+import hashlib
 import json
+import logging
 import pickle
+import time
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from functools import wraps
 from pathlib import Path
 from threading import Lock
-from typing import Any, Optional, Union
-from functools import wraps
-import hashlib
-import logging
-import time
+from typing import Any, Optional, Union, List
 
 logger = logging.getLogger(__name__)
 
@@ -151,20 +151,77 @@ class MemoryCacheBackend(CacheBackend):
             return key in self._cache and not self._cache[key].is_expired()
 
 
+def _is_class_instance(obj: Any) -> bool:
+    """
+    判断对象是否为类实例（排除基本类型和容器类型）
+    """
+    # 排除基本类型
+    if isinstance(obj, (str, int, float, bool, type(None))):
+        return False
+
+    # 排除容器类型
+    if isinstance(obj, (list, dict, tuple, set)):
+        return False
+
+    # 检查是否有类定义
+    return hasattr(obj, '__class__') and hasattr(obj.__class__, '__name__')
+
+
+def _process_args_for_cache_key(args: tuple) -> List[Any]:
+    """
+    处理参数列表，将类实例替换为其类的全名字符串
+    """
+    processed_args = []
+    for arg in args:
+        if _is_class_instance(arg):
+            # 获取类的全名（模块名+类名）
+            module_name = getattr(arg.__class__, '__module__', '')
+            class_name = getattr(arg.__class__, '__name__', '')
+
+            if module_name:
+                full_class_name = f"{module_name}.{class_name}"
+            else:
+                full_class_name = class_name
+
+            processed_args.append(f"<class_instance:{full_class_name}>")
+        else:
+            # 其他参数保持原样
+            processed_args.append(arg)
+    return processed_args
+
+
 def get_cache_key(*args, **kwargs) -> str:
-    """生成缓存键，使用pickle处理复杂对象"""
+    """生成缓存键，类实例参数只使用类全名"""
     try:
-        # 使用pickle序列化，它可以处理更多类型的对象
+        # 处理args参数，将类实例替换为类全名
+        processed_args = _process_args_for_cache_key(args)
+
+        # 构造可序列化的数据结构
         key_data = {
-            "args": args,
+            "args": processed_args,
             "kwargs": kwargs
         }
-        key_bytes = pickle.dumps(key_data)
-        return hashlib.md5(key_bytes).hexdigest()
+
+        # 尝试使用JSON序列化（更可读）
+        try:
+            key_str = json.dumps(key_data, sort_keys=True, ensure_ascii=False, default=str)
+            return hashlib.md5(key_str.encode("utf-8")).hexdigest()
+        except Exception:
+            # JSON序列化失败则使用pickle
+            key_bytes = pickle.dumps(key_data)
+            return hashlib.md5(key_bytes).hexdigest()
+
     except Exception as e:
-        # 如果pickle也失败，回退到简单的字符串哈希
-        key_str = f"{hash(str(args))}_{hash(str(kwargs))}"
-        return hashlib.md5(key_str.encode("utf-8")).hexdigest()
+        # 最后的回退方案
+        logger.warning(f"Failed to generate cache key, using fallback method: {e}")
+        # 处理回退方案中的参数
+        try:
+            fallback_processed_args = _process_args_for_cache_key(args)
+            fallback_key = f"{hash(str(fallback_processed_args))}_{hash(str(kwargs))}"
+        except Exception:
+            fallback_key = f"{hash(str(args))}_{hash(str(kwargs))}"
+
+        return hashlib.md5(fallback_key.encode("utf-8")).hexdigest()
 
 
 class CacheManager:
