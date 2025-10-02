@@ -1,0 +1,8 @@
+class TextChunk(BaseModel):
+    """分块结果数据结构"""
+    start_chapter_idx: int = Field(..., description="分块起始章节索引")
+    end_chapter_idx: int = Field(..., description="分块结束章节索引")
+    text: str = Field(..., description="分块文本内容")
+    estimated_tokens: int = Field(..., description="估计的分块 tokens 数")
+    is_natural_break: bool = Field(..., description="是否为剧情自然断点切分")
+    break_reason: str = Field(..., description="分块断点原因，如章节结尾、关键词匹配等")

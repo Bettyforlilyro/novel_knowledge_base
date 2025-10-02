@@ -1,0 +1,12 @@
+chunking:
+  max_tokens_per_chunk: 2000
+  min_tokens_per_chunk: 800
+  paragraph_separator: "\n"   # 段落分隔符，只有一个换行
+  safe_break_keywords:
+    - r"卷完"
+    - r"(数)[日|月|年]之后"
+    - r"翌日"
+    - r"落幕"
+    - r"第.*章"
+    - r"至此"  # 可扩展为更复杂的对话/动作检测
+  use_llm_for_refinement: true  # 是否启用LLM对模糊边界进行优化，配置默认true
